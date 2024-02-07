@@ -14,9 +14,8 @@ const staticFiles = async (ctx: Context, next: () => Promise<unknown>) => {
     }
   };
 
-const createSessionID = async (ip: string, salt: string) => await bcrypt.hash(ip, salt);
 
-
+/* DB Setup */
 const db = new DB("./testdb.sqlite");
 
 db.execute(`
@@ -35,6 +34,7 @@ db.execute(`
     )
 `);
 
+/* Router Setup */
 const router = new Router();
 
 router.get("/", async (ctx: Context) => {
@@ -69,13 +69,14 @@ router.get("/stats/salt", async (ctx: Context) => {
   }
 });
 
+const createSessionID = async (ip: string, salt: string) => await bcrypt.hash(ip, salt);
 
 const getSalt = async () => {
   
-  const valid_for = 1000 * 60 * 60 * 24;
+  const valid_for: number = 1000 * 60 * 60 * 24;
 
   const is_expired = (current_time: number, expired_time: number, valid_for: number) => {
-    return current_time - valid_for > expired_time ? true : false;
+    return ((current_time - valid_for) > expired_time) ? true : false;
   };
 
   let saltQuery = db.transaction(() => {
@@ -87,14 +88,13 @@ const getSalt = async () => {
     }
   });
 
-  const createNewSalt = async (expires = Date.now()) => {
+  const createNewSalt = async (valid_for: number, expires: number = Date.now()) => {
     let new_salt: string = await bcrypt.genSalt(8);
     let new_expiry_time: number = expires + valid_for;
-    console.log(new_expiry_time);
     return {salt: new_salt, expires: new_expiry_time};
   }
 
-  const updateSalt = (new_salt) => {
+  const updateSalt = (new_salt: { salt: string; expires: number }) => {
     const newSaltQuery = db.prepareQuery(
       "INSERT INTO salts (salt, expires) VALUES (:salt, :expires)",
     );
@@ -110,13 +110,13 @@ const getSalt = async () => {
   }
 
   if (!saltQuery[0]) {
-    let new_salt = await createNewSalt();
+    let new_salt = await createNewSalt(valid_for);
     updateSalt(new_salt);
     return new_salt.salt;
   }
   
   if (is_expired(Date.now(), saltQuery[0].expires, valid_for)) {
-    let new_salt = await createNewSalt(saltQuery[0].expires);
+    let new_salt = await createNewSalt(valid_for, saltQuery[0].expires);
     updateSalt(new_salt);
     return new_salt.salt;
   } else {
