@@ -1,0 +1,9 @@
+{
+  "devDependencies": {
+    "uglify-js": "^3.17.4"
+  },
+  "scripts": {
+    "minify": "uglifyjs fa.js --compress --mangle --output ./test/lib/fa.min.js",
+    "build": "tsc && npm run minify"
+  }
+}
