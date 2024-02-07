@@ -14,22 +14,25 @@ const staticFiles = async (ctx: Context, next: () => Promise<unknown>) => {
     }
   };
 
-const createSessionID = async (ip: string) => {
-  const salt: string = await bcrypt.genSalt(8);
-  const hash: string = await bcrypt.hash(ip, salt);
-  return hash;
-}
+const createSessionID = async (ip: string, salt: string) => await bcrypt.hash(ip, salt);
 
 
 const db = new DB("./testdb.sqlite");
+
 db.execute(`
   CREATE TABLE IF NOT EXISTS stats (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
     sessionID TEXT,
     url TEXT,
     referrer TEXT,
     time INTEGER
   )
+`);
+
+db.execute(`
+    CREATE TABLE IF NOT EXISTS salts (
+      salt TEXT,
+      expires INTEGER
+    )
 `);
 
 const router = new Router();
@@ -50,10 +53,84 @@ router.get("/stats", async (ctx: Context) => {
   ctx.response.body = stats;
 });
 
+router.get("/stats/salt", async (ctx: Context) => {
+  let salts = db.transaction(() => {
+    try {
+      return db.query("SELECT * FROM salts;");
+    } catch (error) {
+      console.error(error);
+      return error;
+    }
+  });
+  if (salts.length > 0) {
+    ctx.response.body = salts[0];
+  } else {
+    return null;
+  }
+});
+
+
+const getSalt = async () => {
+  
+  const valid_for = 1000 * 60 * 60 * 24;
+
+  const is_expired = (current_time: number, expired_time: number, valid_for: number) => {
+    return current_time - valid_for > expired_time ? true : false;
+  };
+
+  let saltQuery = db.transaction(() => {
+    try {
+      return db.queryEntries("SELECT * FROM salts;");
+    } catch (error) {
+      console.error(error);
+      return error;
+    }
+  });
+
+  const createNewSalt = async (expires = Date.now()) => {
+    let new_salt: string = await bcrypt.genSalt(8);
+    let new_expiry_time: number = expires + valid_for;
+    console.log(new_expiry_time);
+    return {salt: new_salt, expires: new_expiry_time};
+  }
+
+  const updateSalt = (new_salt) => {
+    const newSaltQuery = db.prepareQuery(
+      "INSERT INTO salts (salt, expires) VALUES (:salt, :expires)",
+    );
+    try {
+      db.query("DELETE FROM salts");
+      newSaltQuery.execute({
+        salt: new_salt.salt,
+        expires: new_salt.expires
+      });
+    } catch (error) {
+      console.error(error);
+    }
+  }
+
+  if (!saltQuery[0]) {
+    let new_salt = await createNewSalt();
+    updateSalt(new_salt);
+    return new_salt.salt;
+  }
+  
+  if (is_expired(Date.now(), saltQuery[0].expires, valid_for)) {
+    let new_salt = await createNewSalt(saltQuery[0].expires);
+    updateSalt(new_salt);
+    return new_salt.salt;
+  } else {
+    return saltQuery[0].salt;
+  }
+
+};
+
 router.post("/", async (ctx: Context) => {
     const body = await ctx.request.body.json();
 
-    const sessionID: string = body.fa_sid ? body.fa_sid : (await createSessionID(ctx.request.ip));
+    const salt = await getSalt();
+
+    const sessionID: string = await createSessionID(ctx.request.ip, salt);
 
     const dataObject = {
       url: body.url,
@@ -74,11 +151,7 @@ router.post("/", async (ctx: Context) => {
       }
     });
 
-    if (body.fa_sid) {
-      ctx.response.body = JSON.stringify({});
-    } else {
-      ctx.response.body = JSON.stringify(dataObject);
-    }
+    ctx.response.body = true;
 });
 
 const app = new Application();
